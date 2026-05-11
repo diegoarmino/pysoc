@@ -10,13 +10,15 @@ module dip_mo
   
   contains
 
-  subroutine cal_dip_moint(aoint_temp, mo_coeff_temp0)
-  
-    integer      :: i, k
-    real(dpr)    :: aoint_temp(input%num_bov(1),input%num_bov(1),3)     
-    real(dpr)    :: mo_coeff_temp0(input%num_bov(1),ndim1)    
-    real(dpr)    :: mo_coeff_temp(input%num_bov(1),ndim1)    
-    real(dpr), allocatable    :: tp_mo_coeff_temp(:,:) 
+  subroutine cal_dip_moint(aoint_temp1d, mo_coeff_temp0)
+    integer                :: i, k
+    real(dpr), intent(in)  :: aoint_temp1d(input%num_bov(1)*input%num_bov(1)*3)
+    real(dpr), intent(in)  :: mo_coeff_temp0(input%num_bov(1), ndim1)
+    real(dpr)              :: aoint_temp(input%num_bov(1), input%num_bov(1), 3)
+    real(dpr)              :: mo_coeff_temp(input%num_bov(1),ndim1)    
+    real(dpr), allocatable :: tp_mo_coeff_temp(:,:) 
+
+    aoint_temp = reshape(aoint_temp1d, [input%num_bov(1), input%num_bov(1), 3])
     
     allocate(dip_moint(ndim1, ndim1, 3))
     allocate(tp_mo_coeff_temp(ndim1, input%num_bov(1)))
