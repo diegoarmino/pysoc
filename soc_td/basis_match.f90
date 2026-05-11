@@ -49,14 +49,16 @@ module basis_match
     
   end subroutine shell_matrix
 
-  subroutine basmatch_matr(matrix, ndim, compont) 
-  
-    integer    :: flag, compont, ndim
-    integer    :: k, i, j, dim_i, dim_j, nshi, nshj
-    real(dpr)  :: matrix(ndim,ndim,compont)
-    real(dpr), allocatable    :: matrix_temp(:,:)
-    real(dpr), allocatable    :: matrix_i(:,:), matrix_j(:,:)
    
+  subroutine basmatch_matr(matrix1d, ndim, compont)
+    integer, intent(in)      :: ndim, compont
+    real(dpr), intent(inout) :: matrix1d(ndim*ndim*compont)
+    real(dpr)                :: matrix(ndim, ndim, compont)
+    integer                  :: flag, k, i, j, dim_i, dim_j, nshi, nshj
+    real(dpr), allocatable   :: matrix_temp(:,:), matrix_i(:,:), matrix_j(:,:)
+
+    matrix = reshape(matrix1d, [ndim, ndim, compont])
+
     do k=1, compont 
       !print *,"DIM_old=", k
       !print *, matrix(10:20,10,k)
@@ -90,6 +92,7 @@ module basis_match
       enddo
       !print *,"DIM_new=", k
       !print *, matrix(10:20,10,k)
+      matrix1d = reshape(matrix, [ndim*ndim*compont])
     enddo 
     
   end subroutine basmatch_matr

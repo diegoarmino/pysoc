@@ -17,23 +17,22 @@ module trans_dipole
 
   contains
 
-  subroutine dip_state()
-    
+subroutine dip_state()
     integer       :: k
     integer       :: si, sj, ti, tj, ki
     character(10) :: multip
     real(dpr)     :: dip_statint_temp(3)
-    
-    dip_singl = 0.0
-    dip_tripl = 0.0    
-    dip_statint_temp = 0.0
+
     print *, "input%ene_s", input%ene_s
     print *, "input%ene_t", input%ene_t
     open(unit=17, file='trans_dip_out.dat', status='replace')
+
     if(input%do_s0 == 'True') then
-      multip = "singlet"
+      ! Allocate first
       allocate(dip_singl(input%n_singl,input%n_singl,3))
-      !singlets
+      dip_singl = 0.0
+
+      multip = "singlet"
       do si=0, input%n_singl-1
         do sj=si+1, input%n_singl
           if(si == 0) then
@@ -46,9 +45,10 @@ module trans_dipole
           write(17, 1715) si, sj, (dip_singl(si+1, sj, ki), ki=1,3)
         enddo
       enddo
-      !triplets
+
       multip = "triplet"
       allocate(dip_tripl(input%n_tripl,input%n_tripl,3))
+      dip_tripl = 0.0
       do ti=1, input%n_tripl
         do tj=ti+1, input%n_tripl
           call cal_dipci(ti, tj, multip, input%ene_t, dip_statint_temp)
@@ -56,11 +56,6 @@ module trans_dipole
           write(17, 1717) ti, tj, (dip_tripl(ti, tj, ki), ki=1,3)
         enddo
       enddo
-      
-      !write(*, 1716) (dip_singl(1, k, 1), k=2,input%n_singl+1)
-      !write(*, 1716) (dip_singl(1, k, 2), k=2,input%n_singl+1)
-      !write(*, 1716) (dip_singl(1, k, 3), k=2,input%n_singl+1)
-
     else
       multip = "singlet"
       allocate(dip_singl(input%n_singl,input%n_singl,3))
