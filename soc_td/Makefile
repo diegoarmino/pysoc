@@ -6,15 +6,16 @@ OBJS = soc_td.o init_prep.o data_input.o prec_mod.o soc_mo.o dip_mo.o basis_matc
 #LIBDIR = /opt/intel/composer_xe_2013_sp1.2.144/mkl/lib/intel64
 LIBDIR = /opt/intel/oneapi/compiler/2021.1-beta10/linux/lib/x64
 INCLUDEDIR = 
-LIBS = -Wl,--start-group $(LIBDIR)/libmkl_intel_ilp64.a\
-       $(LIBDIR)/libmkl_core.a $(LIBDIR)/libmkl_sequential.a\
-       -Wl,--end-group\
-       -lpthread -lm
-LIBS =
+#LIBS = -Wl,--start-group $(LIBDIR)/libmkl_intel_ilp64.a\
+#       $(LIBDIR)/libmkl_core.a $(LIBDIR)/libmkl_sequential.a\
+#       -Wl,--end-group\
+#       -lpthread -lm
+LIBS = 
 
-F90 =ifort
-#F90 = gfortran
-F90FLAGS = -O -heap-arrays 1024
+#F90 =ifort
+#F90FLAGS = -O -heap-arrays 1024
+F90 = gfortran
+F90FLAGS = -O0 -ffree-line-length-none 
 
 all: $(PROG)
 
