@@ -22,6 +22,7 @@ module init_prep
   contains
 
   subroutine read_input()
+    integer :: ios
     
     open(unit=171, file='soc_td_input.dat', status='old')
     read(171, *) input%qm_flag
@@ -44,10 +45,11 @@ module init_prep
     read(171, *) input%ene_t(:)
     read(171, *) input%num_bov(:)
 
-    if (input%qm_flag == 'tddftb') then
-      read(171, *) input%tbcart_bov(:) !for tddftb
-      print *, "tbcart_bov", input%tbcart_bov(:)
+    read(171, *, iostat=ios) input%tbcart_bov(:)
+    if (ios /= 0) then
+      input%tbcart_bov = input%num_bov
     endif
+    print *, "tbcart_bov", input%tbcart_bov(:)
     
     open(unit=16, file='ene_out.dat', status='replace') 
     write(16, 1705) input%ene_s(:)
@@ -74,7 +76,7 @@ module init_prep
   
   subroutine read_soc_ao()
     
-    if (input%qm_flag == 'tddftb') then
+    if (input%qm_flag == 'tddftb' .or. input%tbcart_bov(1) > input%num_bov(1)) then
       allocate(aoint%tbgto(input%tbcart_bov(1)**2*3)) 
       allocate(aoint%gto(input%num_bov(1)**2*3)) 
       open(unit=172, file='soc_ao.dat', status='old')
@@ -96,7 +98,7 @@ module init_prep
   
   subroutine read_dip_ao()
     ! read dipole integral from MolSOC 
-    if (input%qm_flag == 'tddftb') then
+    if (input%qm_flag == 'tddftb' .or. input%tbcart_bov(1) > input%num_bov(1)) then
       allocate(dipint%tbgto(input%tbcart_bov(1)**2*3)) 
       allocate(dipint%gto(input%num_bov(1)**2*3)) 
       open(unit=176, file='dip_ao.dat', status='old')
@@ -122,14 +124,17 @@ module init_prep
 
     integer    :: dim_half ! down triangle including diag 
     integer    :: dim_full ! in tddftb
+    integer    :: ios
 
-    if (input%qm_flag == 'tddftb') then
+    if (input%qm_flag == 'tddftb' .or. input%tbcart_bov(1) > input%num_bov(1)) then
       !allocate(overlpint%tbgto(dim_full))
       dim_full = input%num_bov(1)*input%num_bov(1)
       allocate(overlpint%gto(dim_full))
       allocate(overlpint%molout(dim_full))
-      open(unit=177, file='ao_overlap.dat', status='old')
-      read(177, *) overlpint%gto(:)
+      open(unit=177, file='ao_overlap.dat', status='old', iostat=ios)
+      if (ios == 0) then
+        read(177, *) overlpint%gto(:)
+      endif
 
       dim_full = input%tbcart_bov(1)*input%tbcart_bov(1)
       allocate(overlpint%molsoc(dim_full))

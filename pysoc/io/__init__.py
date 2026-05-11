@@ -1,6 +1,7 @@
 from pysoc.io.molsoc import Molsoc
 from .gaussian import Gaussian_parser
 from .dftb_plus import DFTB_plus_parser
+from .orca import Orca_parser
 
 def parser_from_program(self, program):
     """
@@ -12,6 +13,8 @@ def parser_from_program(self, program):
         return Gaussian_parser
     elif program == "DFTB+":
         return DFTB_plus_parser
+    elif program == "ORCA":
+        return Orca_parser
     else:
         # Unrecognised.
         raise Exception("Unknown or unrecognised program name '{}'".format(program))

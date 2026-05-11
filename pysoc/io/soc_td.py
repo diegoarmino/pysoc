@@ -167,7 +167,12 @@ class Soc_td():
         #td soc
         #
         
-        dat_out = dict(a0_code = ["gauss_tddft" if  type(self.molsoc) == Gaussian_parser else "tddftb"],
+        if type(self.molsoc) == DFTB_plus_parser:
+            code_type = "tddftb"
+        else:
+            code_type = "gauss_tddft"
+            
+        dat_out = dict(a0_code = [code_type],
                        a0_dipole = dipole_flag,
                        a0_num_g = ["True" if include_ground else "False"], 
                        a0_thresh = [CI_coefficient_threshold],
@@ -180,9 +185,8 @@ class Soc_td():
                        b1_order_t = self.molsoc.triplet_levels,
                        b2_ener_t = self.molsoc.triplet_energies, 
                        c_num_bov = [self.molsoc.num_orbitals, self.molsoc.num_occupied_orbitals, self.molsoc.num_virtual_orbitals])
-        #if QM_program == 'DFTB+':
-        if type(self.molsoc) == DFTB_plus_parser:
-            dat_out.update({'d_basis_ncart': self.molsoc.ao_ncart}) 
+        if hasattr(self.molsoc, 'ao_ncart'):
+            dat_out.update({'d_basis_ncart': self.molsoc.ao_ncart})
         
         with open(Path(self.molsoc.output, 'soc_td_input.dat'), 'w') as soc_td_input_file:
             for i, line in sorted(dat_out.items()):

@@ -32,7 +32,7 @@ program soc_td
   print *, "hello0"
   !call check_norm_mo(overlpint%gto, mo_coeff)
   print *, "hello1"
-  if (input%qm_flag /= 'tddftb') then
+  if (input%qm_flag /= 'tddftb' .and. input%tbcart_bov(1) == input%num_bov(1)) then
     !match AO integral(from molsoc) orders with MO coeffs(from QM code)
     !dxx,dyy,dzz,dxy,dxz,dyz in Gaussian
     !while dxx,dxy,dxz,dyy,dyz,dzz in MolSOC
@@ -40,13 +40,13 @@ program soc_td
     call check_norm_mo(overlpint%gto, mo_coeff)
     call basmatch_matr(aoint%gto, input%num_bov(1), 3)
   else
-    !Cartesian to spherical GTOs for tddftb
+    !Cartesian to spherical GTOs for tddftb and ORCA/Gaussian
     call basmatch_tb(aoint%tbgto, input%tbcart_bov(1), 3,&
          aoint%gto, input%num_bov(1))
-    !convert overlap integral from molsoc, then compare it with that from DFTB+ output(oversqr.dat)
+    !convert overlap integral from molsoc, then compare it with that from output(oversqr.dat)
     call basmatch_tb(overlpint%molsoc, input%tbcart_bov(1), 1,&
          overlpint%molout, input%num_bov(1))
-    
+    call check_norm_mo(overlpint%molout, mo_coeff)
   endif
   !stop
   !MO integral for SOC

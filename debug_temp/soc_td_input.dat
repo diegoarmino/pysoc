@@ -1,0 +1,14 @@
+gauss_tddft    a0_code
+True           a0_dipole
+True           a0_num_g
+1e-05          a0_thresh
+5              a0_total_s
+5              a0_total_t
+1              2              3              4              5              a1_num_s
+3              6              8              9              10             a1_order_s
+2.2726         2.458          2.6012         2.6856         2.7215         a2_ene_s
+1              2              3              4              5              b1_num_t
+1              2              4              5              7              b1_order_t
+2.1441         2.2644         2.3003         2.3983         2.5405         b2_ener_t
+788            145            643            c_num_bov
+828            145            643            d_basis_ncart

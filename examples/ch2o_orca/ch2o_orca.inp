@@ -1,0 +1,16 @@
+! wB97X-D3 TZVP
+%tddft
+    nroots 5
+end
+%output
+    Print[ P_Basis ] 2
+    Print[ P_Overlap ] 1
+    Print[ P_MOs ] 1
+end
+
+* xyz 0 1
+C         -0.131829      -0.000001      -0.000286
+O          1.065288       0.000001       0.000090
+H         -0.718439       0.939705       0.000097
+H         -0.718441      -0.939705       0.000136
+*

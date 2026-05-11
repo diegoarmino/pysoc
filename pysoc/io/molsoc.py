@@ -257,13 +257,8 @@ class Molsoc(object):
         # Check the molsoc output file has been written.
         if not Path(self.output, 'molsoc_overlap.dat').exists():
             # The program appeared to run correctly, but didn't give us the data we need.
-            try:
-                with open(Path(self.output, "molsoc.out"), "rt") as molsoc_output_file:
-                    molsoc_output = molsoc_output_file.read()
-                    
-            except FileNotFoundError:
-                # No output file either
-                molsoc_output = "(molsoc.out could not be found)"
+            with open(Path(self.output, "molsoc.out"), "rt") as molsoc_output_file:
+                molsoc_output = molsoc_output_file.read()
             
             raise Exception("Molsoc output file molsoc_overlap.dat could not be found, dumping molsoc program output:\n{}".format(molsoc_output))
     
