@@ -4,17 +4,20 @@ SRCS = soc_td.f90 init_prep.f90 data_input.f90 prec_mod.f90 soc_mo.f90 dip_mo.f9
 OBJS = soc_td.o init_prep.o data_input.o prec_mod.o soc_mo.o dip_mo.o basis_match.o norm_mo.o soc_state.o trans_dipole.o
 
 #LIBDIR = /opt/intel/composer_xe_2013_sp1.2.144/mkl/lib/intel64
-LIBDIR = /opt/intel/oneapi/compiler/2021.1-beta10/linux/lib/x64
+#LIBDIR = /opt/intel/oneapi/compiler/2021.1-beta10/linux/lib/x64
 INCLUDEDIR = 
-LIBS = -Wl,--start-group $(LIBDIR)/libmkl_intel_ilp64.a\
-       $(LIBDIR)/libmkl_core.a $(LIBDIR)/libmkl_sequential.a\
-       -Wl,--end-group\
-       -lpthread -lm
-LIBS =
+#LIBS = -Wl,--start-group $(LIBDIR)/libmkl_intel_ilp64.a\
+#       $(LIBDIR)/libmkl_core.a $(LIBDIR)/libmkl_sequential.a\
+#       -Wl,--end-group\
+#       -lpthread -lm
+LIBS = -L/usr/local/lib -lopenblas
 
-F90 =ifort
-#F90 = gfortran
-F90FLAGS = -O -heap-arrays 1024
+
+#F90 =ifort
+#F90FLAGS = -O -heap-arrays 1024
+F90 = gfortran
+F90FLAGS = -O3 -fexternal-blas -ffree-line-length-none
+
 
 all: $(PROG)
 
