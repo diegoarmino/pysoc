@@ -10,10 +10,11 @@ LIBS = -Wl,--start-group $(LIBDIR)/libmkl_intel_ilp64.a\
        $(LIBDIR)/libmkl_core.a $(LIBDIR)/libmkl_sequential.a\
        -Wl,--end-group\
        -lpthread -lm
-LIBS = -lopenblas
+LIBS =
 
-F90 = gfortran
-F90FLAGS = -O3 -fexternal-blas -ffree-line-length-none
+F90 =ifort
+#F90 = gfortran
+F90FLAGS = -O -heap-arrays 1024
 
 all: $(PROG)
 

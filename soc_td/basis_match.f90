@@ -244,9 +244,8 @@ module basis_match
       do i=1, dim_out
         !write(*, "(500f12.7)") matr_out(:,i,k)
       enddo
-      print *, "matr_out diag1", matr_out(1,1,k)
-      print *, "matr_out diag2", matr_out(dim_out,dim_out,k)
-      print *, "matr_out off2", matr_out(dim_out,dim_out-1,k), matr_out(dim_out-1,dim_out,k)
+      !print *, "matr_out diag2", matr_out(dim_out,dim_out,k)
+      !print *, "matr_out off2", matr_out(dim_out,dim_out-1,k), matr_out(dim_out-1,dim_out,k)
     enddo 
     
   end subroutine basmatch_tb
