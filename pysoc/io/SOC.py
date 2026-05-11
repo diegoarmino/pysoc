@@ -103,9 +103,11 @@ class Calculator():
             CI_coefficient_threshold = 1.0e-5
         
         # Use fixed directory for debugging
-        import os
-        output = Path('/home/diegoa/dev/pysoc/debug_temp')
-        output.mkdir(exist_ok = True)
+        import tempfile
+        output = Path(tempfile.mkdtemp())
+       # import os
+       # output = Path('/home/diegoa/dev/pysoc/debug_temp')
+       # output.mkdir(exist_ok = True)
                 
         # Parse and prepare input for molsoc.
         try:

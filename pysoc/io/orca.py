@@ -27,7 +27,6 @@ class Orca_parser(Molsoc):
         return cls(out_file_name=out_file_name, **kwargs)
 
     def parse(self):
-        self._parse_cclib()
         self._parse_mkl_basis()
         self._parse_text()
 
@@ -53,6 +52,60 @@ class Orca_parser(Molsoc):
                         continue
                     es_list.append([es_index+1, round(self.wavenumbers_to_energy(ccdata.etenergies[es_index]), 4)])
 
+    def _parse_mkl_lines(self):
+        # Determine paths
+        mkl_file = self.out_file_name.with_suffix('.mkl')
+        
+        if not mkl_file.exists():
+            import subprocess
+            print(f"Warning: {mkl_file.name} not found. Attempting to generate it with orca_2mkl.")
+            try:
+                subprocess.run(['orca_2mkl', self.out_file_name.stem, '-mkl'], cwd=self.out_file_name.parent, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                print(f"Warning: orca_2mkl failed or not found. Make sure orca_2mkl is in your PATH and {self.out_file_name.with_suffix('.gbw').name} exists.")
+        
+        if not mkl_file.exists():
+            raise FileNotFoundError(f"Required {mkl_file.name} not found and could not be generated.")
+        return mkl_file.read_text().splitlines()
+    
+    def _parse_mkl_coord(self, lines):
+        # lines is a list of strings (the whole MKL file)
+        in_coord = False
+        for line in lines:
+            if line.startswith('$COORD'):
+                in_coord = True
+                continue
+            if in_coord:
+                if line.startswith('$END'):
+                    break
+                parts = line.split()
+                if len(parts) >= 4:
+                    atnum = int(parts[0])
+                    x, y, z = map(float, parts[1:4])
+                    element = str(periodictable.elements[atnum])
+                    self.geometry.append([element, x, y, z])
+        self.num_atoms = len(self.geometry)
+
+    def _parse_mkl_occ(self, lines):
+        in_occ = False
+        occs = []
+        for line in lines:
+            if line.startswith('$OCC_ALPHA'):
+                in_occ = True
+                continue
+            if in_occ:
+                if line.startswith('$END'):
+                    break
+                # extract all floats from the line
+                for token in line.split():
+                    try:
+                        occs.append(float(token))
+                    except ValueError:
+                        pass
+        self.num_orbitals = len(occs)
+        self.num_occupied_orbitals = sum(1 for o in occs if o > 0.5)
+        self.num_virtual_orbitals = self.num_orbitals - self.num_occupied_orbitals
+
     def _parse_mkl_basis(self):
         # Determine paths
         mkl_file = self.out_file_name.with_suffix('.mkl')
@@ -69,6 +122,9 @@ class Orca_parser(Molsoc):
             raise FileNotFoundError(f"Required {mkl_file.name} not found and could not be generated.")
             
         lines = mkl_file.read_text().splitlines()
+        self._parse_mkl_coord(lines)         
+        self._parse_mkl_occ(lines)
+
         in_basis = False
         basis_blocks = []
         current_block = []
@@ -132,13 +188,16 @@ class Orca_parser(Molsoc):
         in_singlets = False
         in_triplets = False
         
-        ci_dict_singlets = {i: [0.0]*self.ndim for i in range(1, len(self.singlet_states)+1)}
-        ci_dict_triplets = {i: [0.0]*self.ndim for i in range(1, len(self.triplet_states)+1)}
+        #ci_dict_singlets = {i: [0.0]*self.ndim for i in range(1, len(self.singlet_states)+1)}
+        #ci_dict_triplets = {i: [0.0]*self.ndim for i in range(1, len(self.triplet_states)+1)}
+        ci_dict_singlets = {}
+        ci_dict_triplets = {}
         current_state = None
         
         i = 0
         while i < len(lines):
             line = lines[i]
+            i += 1
             
             # 2. OVERLAP MATRIX
             if "OVERLAP MATRIX" in line:
@@ -207,6 +266,28 @@ class Orca_parser(Molsoc):
             if in_singlets or in_triplets:
                 if line.startswith("STATE "):
                     current_state = int(line.split()[1][:-1])
+                        # example: "STATE  1:  E=   0.149148 au      4.059 eV    32734.2 cm**-1 ..."
+                    parts = line.split()
+                    # find the eV value: after 'au' there is something and then 'eV'
+                    try:
+                        # locate the index of 'eV' and take the previous element
+                        idx_ev = parts.index('eV')
+                        if idx_ev > 0:
+                            energy_ev = float(parts[idx_ev-1])
+                        else:
+                            continue
+                    except (ValueError, IndexError):
+                        continue
+
+                    if in_singlets:
+                        self.singlet_states.append([current_state, energy_ev])
+                        if current_state not in ci_dict_singlets:
+                            ci_dict_singlets[current_state] = [0.0] * self.ndim
+                    elif in_triplets:
+                        self.triplet_states.append([current_state, energy_ev])
+                        if current_state not in ci_dict_triplets:
+                            ci_dict_triplets[current_state] = [0.0] * self.ndim
+
                 elif "->" in line:
                     parts = line.split()
                     occ = int(parts[0][:-1]) 
@@ -223,7 +304,6 @@ class Orca_parser(Molsoc):
                         elif in_triplets and current_state in ci_dict_triplets:
                             ci_dict_triplets[current_state][transition_idx] = weight
             
-            i += 1
             
         # Post-process parsed data into Molsoc properties
             
