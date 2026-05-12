@@ -1,7 +1,9 @@
 ! wB97X-D3 TZVP
 %tddft
     nroots 5
+    triplets true
 end
+
 %output
     Print[ P_Basis ] 2
     Print[ P_Overlap ] 1

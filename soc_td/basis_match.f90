@@ -157,23 +157,23 @@ module basis_match
     
   end subroutine shell_tb
 
-  subroutine basmatch_tb(matrix, ndim, compont, matr_out, dim_out) 
-    !from Cartesian to spherical AOs 
-    integer    :: flag, compont, ndim, dim_out
-    integer    :: k, i, j, dim_i, dim_j, nshi, nshj
-    integer    :: dim_i1, dim_i2, dim_j1, dim_j2
-    integer    :: nshi1, nshi2, nshj1, nshj2
-    real(dpr)  :: matrix(ndim,ndim,compont)
-    real(dpr)  :: matr_out(dim_out,dim_out,compont)
-    real(dpr), allocatable    :: matrix_temp1(:,:), matrix_temp2(:,:)
-    real(dpr), allocatable    :: matrix_temp3(:,:)
-    real(dpr), allocatable    :: matrix_i(:,:), matrix_j(:,:)
-    real(dpr), allocatable    :: tp_matrix_i(:,:)
+  subroutine basmatch_tb(matrix1d, ndim, compont, matr_out, dim_out)
+    integer, intent(in)    :: ndim, compont, dim_out
+    real(dpr), intent(in)  :: matrix1d(ndim*ndim*compont)  ! now 1D
+    real(dpr), intent(out) :: matr_out(dim_out, dim_out, compont)
+    real(dpr)              :: matrix(ndim, ndim, compont)
+    integer                :: flag, k, i, j, dim_i, dim_j, nshi, nshj
+    integer                :: dim_i1, dim_i2, dim_j1, dim_j2
+    integer                :: nshi1, nshi2, nshj1, nshj2
+    real(dpr), allocatable :: matrix_temp1(:,:), matrix_temp2(:,:), matrix_temp3(:,:)
+    real(dpr), allocatable :: matrix_i(:,:), matrix_j(:,:), tp_matrix_i(:,:)
+
+    matrix = reshape(matrix1d, [ndim, ndim, compont])
 
     !print *, "mo_coeff_i", mo_coeff(1)
     !print *, "mo_coeff_i", mo_coeff(ndim1*input%num_bov(1))
    
-    do k=1, compont 
+    do k=1, compont
       !print *,"DIM_old=", k
       !print *, matrix(52:68,68,k)
       dim_i1 = 0
@@ -253,5 +253,113 @@ module basis_match
     enddo 
     
   end subroutine basmatch_tb
+
+  subroutine shell_gto(nsh1, nsh2, matrix_n, flag)
+    ! Cartesian to spherical transformation for normalised Gaussian-type orbitals
+    ! Cartesian order (MOLSOC):
+    !   d: dxx, dxy, dxz, dyy, dyz, dzz
+    !   f: fxxx, fxxy, fxxz, fxyy, fxyz, fxzz, fyyy, fyyz, fyzz, fzzz
+    ! Spherical order (DFTB+ convention):
+    !   d: -2(xy), -1(yz), 0(z2), +1(xz), +2(x2y2)
+    !   f: -3(y3), -2(xyz), -1(yz2), 0(z3), +1(xz2), +2(zx2), +3(x3)
+    integer, intent(in)  :: nsh1, nsh2
+    integer, intent(out) :: flag
+    real(dpr), intent(out) :: matrix_n(nsh1, nsh2)
+
+    matrix_n = 0.0_dpr
+    flag = 1
+
+    select case(nsh1)
+    case(1)   ! s
+      matrix_n(1,1) = 1.0_dpr
+    case(3)   ! p
+      matrix_n(1,2) = 1.0_dpr    ! y  <- py
+      matrix_n(2,3) = 1.0_dpr    ! z  <- pz
+      matrix_n(3,1) = 1.0_dpr    ! x  <- px
+    case(5)   ! d
+      ! Spherical d functions from normalised Cartesian d (dxx, dxy, dxz, dyy, dyz, dzz)
+      !  xy = dxy
+      !  yz = dyz
+      !  xz = dxz
+      !  z2 = (2*dzz - dxx - dyy) / sqrt(6)
+      !  x2y2 = (dxx - dyy) / sqrt(2)
+      matrix_n(1,2) = 1.0_dpr                          ! xy
+      matrix_n(2,5) = 1.0_dpr                          ! yz
+      matrix_n(4,3) = 1.0_dpr                          ! xz
+      matrix_n(3,1) = -1.0_dpr / sqrt(6.0_dpr)         ! z2 from dxx
+      matrix_n(3,4) = -1.0_dpr / sqrt(6.0_dpr)         ! z2 from dyy
+      matrix_n(3,6) =  2.0_dpr / sqrt(6.0_dpr)         ! z2 from dzz
+      matrix_n(5,1) =  1.0_dpr / sqrt(2.0_dpr)         ! x2y2 from dxx
+      matrix_n(5,4) = -1.0_dpr / sqrt(2.0_dpr)         ! x2y2 from dyy
+    case(7)   ! f – placeholders; your test molecule has no f functions
+      ! Use identity for now (replace with correct coefficients later)
+      matrix_n(1,1) = 1.0
+    case default
+      flag = -1
+    end select
+  end subroutine shell_gto
+
+
+  subroutine basmatch_gto(matrix1d, ndim, compont, matr_out, dim_out)
+    ! Same logic as basmatch_tb but calls shell_gto
+    integer, intent(in)    :: ndim, compont, dim_out
+    real(dpr), intent(in)  :: matrix1d(ndim*ndim*compont)
+    real(dpr), intent(out) :: matr_out(dim_out,dim_out,compont)
+    real(dpr)              :: matrix(ndim,ndim,compont)
+    integer                :: flag, k, i, j, dim_i, dim_j, nshi, nshj
+    integer                :: dim_i1, dim_i2, dim_j1, dim_j2
+    integer                :: nshi1, nshi2, nshj1, nshj2
+    real(dpr), allocatable :: matrix_temp1(:,:), matrix_temp2(:,:), matrix_temp3(:,:)
+    real(dpr), allocatable :: matrix_i(:,:), matrix_j(:,:), tp_matrix_i(:,:)
+
+    matrix = reshape(matrix1d, [ndim, ndim, compont])
+
+    do k = 1, compont
+      dim_i1 = 0; dim_i2 = 0
+      do i = 1, ao_orb%nc
+        nshi = ao_orb%nsh(i)
+        if (nshi == 6) then
+          nshi1 = 5; nshi2 = 6
+        elseif (nshi == 10) then
+          nshi1 = 7; nshi2 = 10
+        else
+          nshi1 = nshi; nshi2 = nshi
+        endif
+        dim_i1 = dim_i1 + nshi1
+        dim_i2 = dim_i2 + nshi2
+        dim_j1 = 0; dim_j2 = 0
+        do j = 1, ao_orb%nc
+          nshj = ao_orb%nsh(j)
+          if (nshj == 6) then
+            nshj1 = 5; nshj2 = 6
+          elseif (nshj == 10) then
+            nshj1 = 7; nshj2 = 10
+          else
+            nshj1 = nshj; nshj2 = nshj
+          endif
+          dim_j1 = dim_j1 + nshj1
+          dim_j2 = dim_j2 + nshj2
+
+          allocate(matrix_temp1(nshj2, nshi2))
+          allocate(matrix_temp2(nshj2, nshi1))
+          allocate(matrix_temp3(nshj1, nshi1))
+          allocate(matrix_i(nshi1, nshi2))
+          allocate(tp_matrix_i(nshi2, nshi1))
+          allocate(matrix_j(nshj1, nshj2))
+
+          matrix_temp1(:,:) = matrix(dim_j2-nshj2+1:dim_j2, dim_i2-nshi2+1:dim_i2, k)
+          call shell_gto(nshi1, nshi2, matrix_i, flag)
+          tp_matrix_i = transpose(matrix_i)
+          matrix_temp2 = matmul(matrix_temp1, tp_matrix_i)
+          call shell_gto(nshj1, nshj2, matrix_j, flag)
+          matrix_temp3 = matmul(matrix_j, matrix_temp2)
+          matr_out(dim_j1-nshj1+1:dim_j1, dim_i1-nshi1+1:dim_i1, k) = matrix_temp3
+
+          deallocate(matrix_i, matrix_j, tp_matrix_i)
+          deallocate(matrix_temp1, matrix_temp2, matrix_temp3)
+        enddo
+      enddo
+    enddo
+  end subroutine basmatch_gto
 
 end module

@@ -120,38 +120,38 @@ module init_prep
   end subroutine read_dip_ao
 
   subroutine read_overlp_ao()
-    ! read ovlap integral from the third party QM code
+    integer :: dim_full, dim_half, ios
 
-    integer    :: dim_half ! down triangle including diag 
-    integer    :: dim_full ! in tddftb
-    integer    :: ios
-
-    if (input%qm_flag == 'tddftb' .or. input%tbcart_bov(1) > input%num_bov(1)) then
-      !allocate(overlpint%tbgto(dim_full))
+    if (input%qm_flag /= 'tddftb' .and. input%tbcart_bov(1) /= input%num_bov(1)) then
+      ! ORCA: spherical overlap, read directly
       dim_full = input%num_bov(1)*input%num_bov(1)
       allocate(overlpint%gto(dim_full))
-      allocate(overlpint%molout(dim_full))
+      open(unit=177, file='s_matr.dat', status='old')
+      read(177, *) overlpint%gto(:)
+      close(177)
+    else if (input%qm_flag == 'tddftb') then
+      ! DFTB+: original code completely preserved
+      dim_full = input%num_bov(1)*input%num_bov(1)
+      allocate(overlpint%gto(dim_full))
       open(unit=177, file='ao_overlap.dat', status='old', iostat=ios)
-      if (ios == 0) then
-        read(177, *) overlpint%gto(:)
-      endif
+      if (ios == 0) read(177, *) overlpint%gto(:)
+      close(177)
 
       dim_full = input%tbcart_bov(1)*input%tbcart_bov(1)
       allocate(overlpint%molsoc(dim_full))
       open(unit=1771, file='s_matr.dat', status='old')
       read(1771, *) overlpint%molsoc(:)
+      close(1771)
+      allocate(overlpint%molout(input%num_bov(1)**2))
       overlpint%molout = 0.0
     else
-      dim_half = input%num_bov(1)*(input%num_bov(1)+1)/2
-      dim_half = input%num_bov(1)**2
-      allocate(overlpint%gto(dim_half))
-      !open(unit=177, file='ao_overlap.dat', status='old')
+      ! Gaussian: Cartesian overlap (full square matrix)
+      dim_full = input%num_bov(1)**2
+      allocate(overlpint%gto(dim_full))
       open(unit=177, file='s_matr.dat', status='old')
       read(177, *) overlpint%gto(:)
-    endif
-   
-    close(177)
-   
+      close(177)
+    end if
   end subroutine read_overlp_ao
   
   subroutine read_mo()

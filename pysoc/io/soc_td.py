@@ -6,6 +6,7 @@ import math
 from pysoc import get_resource
 import pysoc
 from pysoc.io.gaussian import Gaussian_parser
+from pysoc.io.orca import Orca_parser
 from pysoc.io.dftb_plus import DFTB_plus_parser
 from pysoc.io.file import write_file, read_file
 
@@ -129,6 +130,8 @@ class Soc_td():
         """        
         # Now write the strange ao_basis.dat.
         self.AO_basis_file_name = Path(self.molsoc.output, "ao_basis.dat")
+        print("molsoc.output is ")
+        print(self.molsoc.output)
         self.write_AO_basis(self.AO_basis_file_name)
         
         # Write MOs and coefficients.
@@ -149,6 +152,8 @@ class Soc_td():
         
         ########################################################################
         s_matr = read_file(Path(self.molsoc.output, 'molsoc_overlap.dat'), 'AO_overlap', self.molsoc.num_transitions, 0)
+        if isinstance(self.molsoc, Orca_parser):
+            s_matr = self.molsoc.AO_overlaps
         write_file(s_matr, Path(self.molsoc.output, 's_matr.dat'), '{}  ')
         ########################################################################
         #read dipole moment on atomic basis

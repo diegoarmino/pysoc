@@ -1,7 +1,9 @@
 from pathlib import Path
 import re
+import math
 import cclib
 import periodictable
+import warnings
 
 from pysoc.io.molsoc import Molsoc
 
@@ -20,6 +22,11 @@ class Orca_parser(Molsoc):
         self.inp_file_name = self.out_file_name
         self.num_frozen_orbitals = 0 
         self.basis_set = []
+        self.active_occupied_orbitals = []
+        self.active_virtual_orbitals = []
+        self._active_occ_position = {}
+        self._active_virt_position = {}
+        self._sparse_ci_threshold = None
 
     @classmethod
     def from_output_files(cls, out_file_name, **kwargs):
@@ -103,8 +110,64 @@ class Orca_parser(Molsoc):
                     except ValueError:
                         pass
         self.num_orbitals = len(occs)
-        self.num_occupied_orbitals = sum(1 for o in occs if o > 0.5)
-        self.num_virtual_orbitals = self.num_orbitals - self.num_occupied_orbitals
+        occupied = [idx for idx, occ in enumerate(occs) if occ > 0.5]
+        virtual = [idx for idx, occ in enumerate(occs) if occ <= 0.5]
+        self._set_active_orbitals(occupied, virtual)
+
+    def _set_active_orbitals(self, occupied, virtual):
+        self.active_occupied_orbitals = list(occupied)
+        self.active_virtual_orbitals = list(virtual)
+        self._active_occ_position = {
+            orbital: idx for idx, orbital in enumerate(self.active_occupied_orbitals)
+        }
+        self._active_virt_position = {
+            orbital: idx for idx, orbital in enumerate(self.active_virtual_orbitals)
+        }
+        self.num_occupied_orbitals = len(self.active_occupied_orbitals)
+        self.num_virtual_orbitals = len(self.active_virtual_orbitals)
+        self.num_frozen_orbitals = self.active_occupied_orbitals[0] if self.active_occupied_orbitals else 0
+
+    def _parse_orbital_range(self, line):
+        match = re.search(
+            r"Operator\s+\d+:\s+Orbitals\s+(-?\d+)\s*\.\.\.\s*(-?\d+)\s+to\s+(-?\d+)\s*\.\.\.\s*(-?\d+)",
+            line,
+        )
+        if match is None:
+            return
+
+        occ_start, occ_end, virt_start, virt_end = [int(value) for value in match.groups()]
+        if min(occ_start, occ_end, virt_start, virt_end) < 0:
+            return
+
+        self._set_active_orbitals(
+            range(occ_start, occ_end + 1),
+            range(virt_start, virt_end + 1),
+        )
+
+    @staticmethod
+    def _permute_mo_ao_block(mo_coeffs, start, order):
+        for mo_idx in range(len(mo_coeffs)):
+            block = [mo_coeffs[mo_idx][start + offset] for offset in range(len(order))]
+            for new_offset, old_offset in enumerate(order):
+                mo_coeffs[mo_idx][start + new_offset] = block[old_offset]
+
+    @staticmethod
+    def _permute_square_block(matrix, start, order):
+        size = len(order)
+        for row in range(len(matrix)):
+            block = [matrix[row][start + offset] for offset in range(size)]
+            for new_offset, old_offset in enumerate(order):
+                matrix[row][start + new_offset] = block[old_offset]
+
+        rows = [matrix[start + offset][:] for offset in range(size)]
+        for new_offset, old_offset in enumerate(order):
+            matrix[start + new_offset] = rows[old_offset]
+
+    @staticmethod
+    def _extend_gaussian_spin_blocks(output, coefficients, beta_sign):
+        scale = 1.0 / math.sqrt(2.0)
+        output.extend(coeff * scale for coeff in coefficients)
+        output.extend(beta_sign * coeff * scale for coeff in coefficients)
 
     def _parse_mkl_basis(self):
         # Determine paths
@@ -124,6 +187,16 @@ class Orca_parser(Molsoc):
         lines = mkl_file.read_text().splitlines()
         self._parse_mkl_coord(lines)         
         self._parse_mkl_occ(lines)
+
+        if self._parse_output_basis():
+            return
+
+        warnings.warn(
+            "Could not find ORCA's raw 'BASIS SET IN INPUT FORMAT' block; "
+            "falling back to the .mkl basis coefficients. These coefficients "
+            "may not match molsoc's expected GTO contraction normalization.",
+            RuntimeWarning,
+        )
 
         in_basis = False
         basis_blocks = []
@@ -170,6 +243,89 @@ class Orca_parser(Molsoc):
         if len(self.basis_set) > 0 and self.basis_set[-1] == "****\n":
             self.basis_set.pop()
 
+    def _parse_output_basis(self):
+        try:
+            lines = self.out_file_name.read_text().splitlines()
+        except UnicodeDecodeError:
+            return False
+
+        try:
+            start_idx = next(
+                idx for idx, line in enumerate(lines)
+                if line.strip() == "BASIS SET IN INPUT FORMAT"
+            )
+        except StopIteration:
+            return False
+
+        basis_by_element = {}
+        current_element = None
+        idx = start_idx + 1
+        while idx < len(lines):
+            line = lines[idx]
+            stripped = line.strip()
+
+            if basis_by_element and current_element is None and stripped.startswith("---"):
+                break
+
+            if stripped.startswith("NewGTO"):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    current_element = parts[1]
+                    basis_by_element[current_element] = []
+                idx += 1
+                continue
+
+            if current_element is not None and stripped.lower().startswith("end;"):
+                current_element = None
+                idx += 1
+                continue
+
+            parts = stripped.split()
+            if (
+                current_element is not None
+                and len(parts) >= 2
+                and parts[0] in self.SHELLS
+                and parts[1].isdigit()
+            ):
+                shell_type = parts[0]
+                num_primitives = int(parts[1])
+                primitives = []
+                for primitive_line in lines[idx + 1: idx + 1 + num_primitives]:
+                    primitive_parts = primitive_line.split()
+                    if len(primitive_parts) < 3:
+                        return False
+                    exponent, coefficient = primitive_parts[-2:]
+                    primitives.append(f"   {exponent:>18}  {coefficient:>16}\n")
+                basis_by_element[current_element].append((shell_type, primitives))
+                idx += num_primitives + 1
+                continue
+
+            idx += 1
+
+        if not basis_by_element:
+            return False
+
+        basis_set = []
+        ao_basis = []
+        for atom in self.geometry:
+            element = atom[0]
+            if element not in basis_by_element:
+                return False
+
+            basis_set.append(f"{element}  0\n")
+            for shell_type, primitives in basis_by_element[element]:
+                basis_set.append(f"{shell_type}   {len(primitives)} 1.0\n")
+                basis_set.extend(primitives)
+                ao_basis.append(self.SHELLS[shell_type])
+            basis_set.append("****\n")
+
+        if basis_set and basis_set[-1] == "****\n":
+            basis_set.pop()
+
+        self.basis_set = basis_set
+        self.ao_basis = ao_basis
+        return True
+
     def _parse_text(self):
         with open(self.out_file_name, 'r') as f:
             lines = f.readlines()
@@ -198,15 +354,16 @@ class Orca_parser(Molsoc):
         while i < len(lines):
             line = lines[i]
             i += 1
+
+            self._parse_orbital_range(line)
             
             # 2. OVERLAP MATRIX
             if "OVERLAP MATRIX" in line:
                 in_overlap = True
-                i += 2
                 overlap_matrix = [[0.0]*self.num_orbitals for _ in range(self.num_orbitals)]
                 continue
             if in_overlap:
-                if "Time for" in line or "ORBITAL ENERGIES" in line or "MOLECULAR ORBITALS" in line or "DIPOLE" in line:
+                if "Time for" in line or "ORBITAL ENERGIES" in line or "MOLECULAR ORBITALS" in line or "DIPOLE" in line or "D-I-I-S" in line:
                     in_overlap = False
                     continue
                 if line.strip() == "" or "----------------" in line:
@@ -222,7 +379,6 @@ class Orca_parser(Molsoc):
             # 3. MOLECULAR ORBITALS
             if "MOLECULAR ORBITALS" in line:
                 in_mos = True
-                i += 2
                 continue
             if in_mos:
                 if len(line.strip()) == 0 and len(lines[i+1].strip()) == 0:
@@ -254,16 +410,28 @@ class Orca_parser(Molsoc):
                         ao_idx += 1
                         
             # 4. CI COEFFICIENTS
-            if "TD-DFT EXCITED STATES (SINGLETS)" in line:
+            if "EXCITED STATES (SINGLETS)" in line:
                 in_singlets = True
                 in_triplets = False
-            elif "TD-DFT EXCITED STATES (TRIPLETS)" in line:
+            elif "EXCITED STATES (TRIPLETS)" in line:
                 in_singlets = False
                 in_triplets = True
             elif "Entering triplet calculation" in line or "RPA-DIAGONALIZATION" in line:
                 in_singlets = False
             
             if in_singlets or in_triplets:
+                if "the weight of the individual excitations are printed if larger than" in line:
+                    match = re.search(r"larger than\s+([0-9.+\-Ee]+)", line)
+                    if match is not None:
+                        try:
+                            self._sparse_ci_threshold = float(match.group(1))
+                        except ValueError:
+                            pass
+
+                if "Storing amplitudes" in line:
+                    in_singlets = False
+                    in_triplets = False
+                    continue
                 if line.startswith("STATE "):
                     current_state = int(line.split()[1][:-1])
                         # example: "STATE  1:  E=   0.149148 au      4.059 eV    32734.2 cm**-1 ..."
@@ -288,23 +456,44 @@ class Orca_parser(Molsoc):
                         if current_state not in ci_dict_triplets:
                             ci_dict_triplets[current_state] = [0.0] * self.ndim
 
-                elif "->" in line:
+                elif "->" in line and ":" in line:
                     parts = line.split()
                     occ = int(parts[0][:-1]) 
-                    virt = int(parts[2][:-1]) 
-                    weight = float(parts[4])
+                    virt = int(parts[2][:-1])
                     
-                    occ_idx = occ
-                    virt_idx = virt - self.num_occupied_orbitals
+                    # Extract the CI amplitude (c=...) – the number is the token
+                    # immediately before the closing parenthesis.
+                    amplitude = None
+                    for idx, token in enumerate(parts):
+                        if token.startswith('(c='):
+                            # The coefficient may be in the same token or the next one
+                            if token.endswith(')'):
+                                amp_str = token[3:-1]   # remove 'c=' and ')'
+                            else:
+                                # the number is the next token, which ends with ')'
+                                amp_str = parts[idx+1].rstrip(')')
+                            try:
+                                amplitude = float(amp_str)
+                            except ValueError:
+                                pass
+                            break
+                    if amplitude is None:
+                        try:
+                            weight = float(parts[4])
+                            amplitude = math.sqrt(weight) if weight >= 0.0 else 0.0
+                        except (IndexError, ValueError):
+                            continue
                     
-                    if 0 <= occ_idx < self.num_occupied_orbitals and 0 <= virt_idx < self.num_virtual_orbitals:
+                    occ_idx = self._active_occ_position.get(occ)
+                    virt_idx = self._active_virt_position.get(virt)
+                    
+                    if occ_idx is not None and virt_idx is not None:
                         transition_idx = occ_idx * self.num_virtual_orbitals + virt_idx
                         if in_singlets and current_state in ci_dict_singlets:
-                            ci_dict_singlets[current_state][transition_idx] = weight
+                            ci_dict_singlets[current_state][transition_idx] = amplitude
                         elif in_triplets and current_state in ci_dict_triplets:
-                            ci_dict_triplets[current_state][transition_idx] = weight
-            
-            
+                            ci_dict_triplets[current_state][transition_idx] = amplitude
+
         # Post-process parsed data into Molsoc properties
             
         # Overlaps (1D list, full matrix since we hijack tddftb branch in Fortran for Spherical harmonics)
@@ -318,10 +507,10 @@ class Orca_parser(Molsoc):
                 else:
                     self.AO_overlaps.append(overlap_matrix[j][i])
                 
-        # MOs (1D list of Alpha coeffs, energies)
-        self.MO_energies = mo_energies
-        
-        # Permute D and F shells to match DFTB+ Spherical Harmonic ordering
+        # Permute ORCA spherical harmonic shells to match the order produced
+        # by the Cartesian -> spherical transform in soc_td/basis_match.f90.
+        p_reorder = [2, 0, 1]  # ORCA: pz, px, py -> PySOC: py, pz, px
+
         # ORCA D: 0(z2), 1(xz), 2(yz), 3(x2y2), 4(xy)
         # DFTB D: 0(xy), 1(yz), 2(z2), 3(xz), 4(x2y2)
         # Mapping ORCA -> DFTB+: ORCA[4, 2, 0, 1, 3]
@@ -330,30 +519,52 @@ class Orca_parser(Molsoc):
         # DFTB F: 0(y3x2y2), 1(xyz), 2(yz2), 3(z3), 4(xz2), 5(zx2y2), 6(xx23y2)
         # Mapping ORCA -> DFTB+: ORCA[6, 4, 2, 0, 1, 3, 5]
         f_reorder = [6, 4, 2, 0, 1, 3, 5]
-        
+
         ao_idx = 0
         while ao_idx < len(aonames):
             name = aonames[ao_idx].lower()
-            if 'dz2' in name:
-                # Reorder the 5 D functions
-                for mo_idx in range(self.num_orbitals):
-                    d_coeffs = [mo_coeffs[mo_idx][ao_idx + k] for k in range(5)]
-                    for k in range(5):
-                        mo_coeffs[mo_idx][ao_idx + k] = d_coeffs[d_reorder[k]]
+            if 'pz' in name:
+                self._permute_mo_ao_block(mo_coeffs, ao_idx, p_reorder)
+                ao_idx += 3
+            elif 'dz2' in name:
+                self._permute_mo_ao_block(mo_coeffs, ao_idx, d_reorder)
                 ao_idx += 5
             elif 'fz3' in name:
-                # Reorder the 7 F functions
-                for mo_idx in range(self.num_orbitals):
-                    f_coeffs = [mo_coeffs[mo_idx][ao_idx + k] for k in range(7)]
-                    for k in range(7):
-                        mo_coeffs[mo_idx][ao_idx + k] = f_coeffs[f_reorder[k]]
+                self._permute_mo_ao_block(mo_coeffs, ao_idx, f_reorder)
                 ao_idx += 7
             else:
                 ao_idx += 1
-                
+          
+        # Also permute the spherical AO overlaps to match MO coefficient order
+        n = self.num_orbitals
+        overlap2d = [[0.0]*n for _ in range(n)]
+        for i in range(n):
+            for j in range(n):
+                overlap2d[i][j] = self.AO_overlaps[i*n + j]
+
+        ao_idx = 0
+        while ao_idx < len(aonames):
+            name = aonames[ao_idx].lower()
+            if 'pz' in name:
+                self._permute_square_block(overlap2d, ao_idx, p_reorder)
+                ao_idx += 3
+            elif 'dz2' in name:
+                self._permute_square_block(overlap2d, ao_idx, d_reorder)
+                ao_idx += 5
+            elif 'fz3' in name:
+                self._permute_square_block(overlap2d, ao_idx, f_reorder)
+                ao_idx += 7
+            else:
+                ao_idx += 1
+
+        self.AO_overlaps = [overlap2d[i][j] for i in range(n) for j in range(n)]
+
+        active_mo_indices = self.active_occupied_orbitals + self.active_virtual_orbitals
+        self.MO_energies = [mo_energies[mo_idx] for mo_idx in active_mo_indices]
+
         self.MOA_coefficients = []
-        for i in range(self.num_orbitals):
-            self.MOA_coefficients.extend(mo_coeffs[i])
+        for mo_idx in active_mo_indices:
+            self.MOA_coefficients.extend(mo_coeffs[mo_idx])
             
         # CI Coeffs
         # soc_td with 'gauss_tddft' expects 2 * ndim coefficients per state for X+Y, 
@@ -361,19 +572,35 @@ class Orca_parser(Molsoc):
         ci_xpy = []
         ci_xmy = []
         
+        # Singlets (state numbers usually 1‑n_singl, but map generically)
         for i in self.requested_singlets:
-            if i in ci_dict_singlets:
-                for coeff in ci_dict_singlets[i]:
-                    # Assume Alpha and Beta components for restricted singlet (coeff / sqrt(2) or just coeff)
-                    ci_xpy.extend([coeff, coeff])
-                    ci_xmy.extend([coeff, coeff])
+            state_num = self.singlet_states[i-1][0]   # actual state number
+            if state_num not in ci_dict_singlets:
+                raise Exception(f"Missing ORCA CI coefficients for singlet state {state_num}")
+            coefficients = ci_dict_singlets[state_num]
+            if not any(abs(coeff) > 0.0 for coeff in coefficients):
+                raise Exception(f"ORCA printed no CI coefficients for singlet state {state_num}")
+            self._extend_gaussian_spin_blocks(ci_xpy, coefficients, beta_sign=1.0)
+            self._extend_gaussian_spin_blocks(ci_xmy, coefficients, beta_sign=1.0)
 
+        # Triplets (state numbers can be > n_singl)
         for i in self.requested_triplets:
-            if i in ci_dict_triplets:
-                for coeff in ci_dict_triplets[i]:
-                    # Assume Alpha and Beta components for restricted triplet
-                    ci_xpy.extend([coeff, -coeff])
-                    ci_xmy.extend([coeff, -coeff])
+            state_num = self.triplet_states[i-1][0]
+            if state_num not in ci_dict_triplets:
+                raise Exception(f"Missing ORCA CI coefficients for triplet state {state_num}")
+            coefficients = ci_dict_triplets[state_num]
+            if not any(abs(coeff) > 0.0 for coeff in coefficients):
+                raise Exception(f"ORCA printed no CI coefficients for triplet state {state_num}")
+            self._extend_gaussian_spin_blocks(ci_xpy, coefficients, beta_sign=-1.0)
+            self._extend_gaussian_spin_blocks(ci_xmy, coefficients, beta_sign=-1.0)
+
+        if self._sparse_ci_threshold is not None and self._sparse_ci_threshold > 0.0:
+            warnings.warn(
+                "ORCA printed only CI amplitudes above "
+                f"{self._sparse_ci_threshold:g}; the parsed TD vectors are incomplete. "
+                "Use a full-vector ORCA source for quantitative SOC values.",
+                RuntimeWarning,
+            )
 
         self.CI_coefficients = ci_xpy + ci_xmy
 

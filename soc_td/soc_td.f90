@@ -29,25 +29,30 @@ program soc_td
   print *, "mo_coeff_i", mo_coeff(ndim1*input%num_bov(1))
 
   call read_overlp_ao() !from QM code
-  print *, "hello0"
   !call check_norm_mo(overlpint%gto, mo_coeff)
-  print *, "hello1"
-  if (input%qm_flag /= 'tddftb' .and. input%tbcart_bov(1) == input%num_bov(1)) then
-    !match AO integral(from molsoc) orders with MO coeffs(from QM code)
-    !dxx,dyy,dzz,dxy,dxz,dyz in Gaussian
-    !while dxx,dxy,dxz,dyy,dyz,dzz in MolSOC
-    call basmatch_matr(overlpint%gto, input%num_bov(1), 1)
-    call check_norm_mo(overlpint%gto, mo_coeff)
-    call basmatch_matr(aoint%gto, input%num_bov(1), 3)
+
+  if (input%qm_flag /= 'tddftb') then
+    if (input%tbcart_bov(1) == input%num_bov(1)) then
+      ! Gaussian: Cartesian integrals, only reorder
+      call basmatch_matr(overlpint%gto, input%num_bov(1), 1)
+      call check_norm_mo(overlpint%gto, mo_coeff)
+      call basmatch_matr(aoint%gto, input%num_bov(1), 3)
+    else
+      ! ORCA: spherical overlap already correct, no transformation needed
+      call check_norm_mo(overlpint%gto, mo_coeff)
+      ! SOC integrals still need Cartesian → spherical transformation
+      call basmatch_gto(aoint%tbgto, input%tbcart_bov(1), 3, & 
+                        aoint%gto, input%num_bov(1))
+    end if
   else
-    !Cartesian to spherical GTOs for tddftb and ORCA/Gaussian
-    call basmatch_tb(aoint%tbgto, input%tbcart_bov(1), 3,&
-         aoint%gto, input%num_bov(1))
-    !convert overlap integral from molsoc, then compare it with that from output(oversqr.dat)
-    call basmatch_tb(overlpint%molsoc, input%tbcart_bov(1), 1,&
-         overlpint%molout, input%num_bov(1))
+    ! DFTB+ (unchanged)
+    call basmatch_tb(aoint%tbgto, input%tbcart_bov(1), 3, &
+                     aoint%gto, input%num_bov(1))
+    call basmatch_tb(overlpint%molsoc, input%tbcart_bov(1), 1, &
+                     overlpint%molout, input%num_bov(1))
     call check_norm_mo(overlpint%molout, mo_coeff)
-  endif
+  end if
+
   !stop
   !MO integral for SOC
   call cal_soc_moint(aoint%gto, mo_coeff) 
@@ -59,13 +64,19 @@ program soc_td
   if(input%do_dip == "True") then
     print *, "calculation of transition dipole"
     call read_dip_ao() !from molsoc
+
     if (input%qm_flag /= 'tddftb') then
-      call basmatch_matr(dipint%gto, ao_orb%nb, 3) !3 means x,y,z
+      if (input%tbcart_bov(1) == input%num_bov(1)) then
+        call basmatch_matr(dipint%gto, ao_orb%nb, 3)
+      else
+        call basmatch_gto(dipint%tbgto, input%tbcart_bov(1), 3, &
+                          dipint%gto, input%num_bov(1))
+      end if
     else
-      call basmatch_tb(dipint%tbgto, input%tbcart_bov(1), 3,&
-           dipint%gto, input%num_bov(1))
-      !checked with Gaussian output
-    endif
+      call basmatch_tb(dipint%tbgto, input%tbcart_bov(1), 3, &
+                       dipint%gto, input%num_bov(1))
+    end if
+
     call cal_dip_moint(dipint%gto, mo_coeff)
     call dip_state()
     deallocate(dip_moint, dip_singl, dip_tripl)
