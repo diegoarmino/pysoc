@@ -424,5 +424,5 @@ Communications 185 (2014) 676-683).
 
 PySOC was rewritten for Python 3.x by Oliver S. Lee.
 
-Support por ORCA was added by Diego J. Alonso de Armiño.
+Support for ORCA was added by Diego J. Alonso de Armiño.
 
