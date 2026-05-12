@@ -39,7 +39,7 @@ def main(
         **aux_files):
     """
     Main program function for PySOC controller program.
-    
+
     :param calc_file: The main QM output file (.log for Gaussian, .xyz for DFTB+). Other required QM output files will be found automatically based on the location of this file.
     :param QM_program: A string identifying the QM program to interface with (currently, one of either 'Gaussian' or 'DFTB+'.
     :param num_singlets: The number of singlet excited states to calculate SOC for. This should not exceed the number of singlets calculated by the QM program.
@@ -94,7 +94,7 @@ if __name__ == '__main__':
     parser.add_argument("-c", "--CSV", dest = "print_csv", help = "Output in CSV format", action = "store_true")
     parser.add_argument("-s", "--singlets", dest = "num_singlets", help = "The number of singlet excited states to calculate SOC for. The default is all available states.", type = int, default = None)
     parser.add_argument("-t", "--triplets", dest = "num_triplets", help = "The number of triplet excited states to calculate SOC for. The default is all available states.", type = int, default = None)
-    parser.add_argument("-p", "--program", dest = "QM_program", help = "The QM program that the excited states were calculated with. If None is given, the program will be guessed from the given calc_file.", choices = ["Gaussian", "DFTB+"], default = None)
+    parser.add_argument("-p", "--program", dest = "QM_program", help = "The QM program that the excited states were calculated with. If None is given, the program will be guessed from the given calc_file.", choices = ["Gaussian", "DFTB+", "ORCA"], default = None)
     parser.add_argument("-T", "--calculation", help = "The type of SOC calculation to perform, see the molsoc manual for more information. one: one-electron SOC; two: SOC with the full Breit–Pauli operator; zeff: one-electron SOC with the screened-nuclear charge method; auto: zeff if supported for the atoms in the given molecule, one otherwise", choices = ("one", "two", "zeff", "auto"), default = "auto")
     parser.add_argument("-S", "--SOC_scale", help = "Scaling factor for Zeff. If None is give, a default (1.0) will be used.", type = float, default = None)
     parser.add_argument("-o", "--output", help = "Path to a directory to write intermediate molsoc files to. If None is given, intermediate files will not be saved.", type = Path, default = None)
@@ -108,5 +108,3 @@ if __name__ == '__main__':
             **vars(parser.parse_args())
         )
     )
-    
-    

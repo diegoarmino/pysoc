@@ -102,21 +102,48 @@ class Calculator():
         if CI_coefficient_threshold is None:
             CI_coefficient_threshold = 1.0e-5
         
-        # Use fixed directory for debugging
-        if output is None:
-            output = Path('/tmp/pysoc_debug')
-        output.mkdir(parents=True, exist_ok=True)
-            
-        # Parse and prepare input for molsoc.
-        try:
-            self.molsoc.parse()
-        except Exception as e:
-            raise Exception("Failed to parse QM output file") from e
-        
-        keywords = [keyword for keyword in self.keywords]
-        # ... rest of the keywords logic (unchanged) ...
-        self.molsoc.prepare(keywords, SOC_scale, output)
-        self.molsoc.run()
-        self.soc_td.prepare(keywords, include_ground, CI_coefficient_threshold)
-        self.soc_td.run()
-        return self.soc_td.table
+        # First, get a temp dir if we need one.
+        with tempfile.TemporaryDirectory() as tempdir:
+            if output is None:
+                output = Path(tempdir)
+            else:
+                output = Path(output)
+                output.mkdir(parents=True, exist_ok=True)
+
+            # Parse and prepare input for molsoc.
+            try:
+                self.molsoc.parse()
+            except Exception as e:
+                raise Exception("Failed to parse QM output file") from e
+
+            keywords = [keyword for keyword in self.keywords]
+
+            # Add our calculation type (one, two or zeff) to our keywords.
+            if self.calculation == "auto":
+                # Check to see if we can use zeff.
+                if not self.molsoc.check_zeff():
+                    warnings.warn("Zeff is not available for one or more of the atoms in this system; using normal one-electron SOC calculation instead")
+                    keywords.append("ONE")
+                else:
+                    keywords.append("ZEFF")
+            elif self.calculation == "one":
+                keywords.append("ONE")
+            elif self.calculation == "two":
+                keywords.append("TWO")
+            elif self.calculation == "zeff":
+                keywords.append("ZEFF")
+            else:
+                raise Exception("Unknown or unrecognised calculation type '{}'".format(self.calculation))
+
+            self.molsoc.prepare(keywords, SOC_scale, output)
+
+            # Run molsoc.
+            self.molsoc.run()
+
+            # Prepare input for soc_td.
+            self.soc_td.prepare(keywords, include_ground, CI_coefficient_threshold)
+
+            # Now call soc_td.
+            self.soc_td.run()
+
+            return self.soc_td.table

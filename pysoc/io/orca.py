@@ -1,6 +1,8 @@
 from pathlib import Path
+import json
 import re
 import math
+import subprocess
 import cclib
 import periodictable
 import warnings
@@ -27,6 +29,7 @@ class Orca_parser(Molsoc):
         self._active_occ_position = {}
         self._active_virt_position = {}
         self._sparse_ci_threshold = None
+        self._td_root_counts = []
 
     @classmethod
     def from_output_files(cls, out_file_name, **kwargs):
@@ -144,6 +147,31 @@ class Orca_parser(Molsoc):
             range(virt_start, virt_end + 1),
         )
 
+    def _parse_root_count(self, line):
+        match = re.search(r"Number of roots to be determined\s+\.\.\.\s+(\d+)", line)
+        if match is not None:
+            self._td_root_counts.append(int(match.group(1)))
+
+    def _warn_if_selected_edge_roots(self):
+        selected_edges = []
+        root_sets = (
+            ("singlet", self.requested_singlets, self._td_root_counts[0] if len(self._td_root_counts) > 0 else None),
+            ("triplet", self.requested_triplets, self._td_root_counts[1] if len(self._td_root_counts) > 1 else None),
+        )
+
+        for multiplicity, requested_roots, available_roots in root_sets:
+            if available_roots is not None and requested_roots and max(requested_roots) >= available_roots:
+                selected_edges.append(f"{multiplicity} root {available_roots}")
+
+        if selected_edges:
+            warnings.warn(
+                "The selected ORCA TD roots include the highest root printed "
+                f"({', '.join(selected_edges)}). Davidson edge roots can be "
+                "unstable or miss nearby states; request extra ORCA roots and "
+                "select the lower subset with -s/-t for production comparisons.",
+                RuntimeWarning,
+            )
+
     @staticmethod
     def _permute_mo_ao_block(mo_coeffs, start, order):
         for mo_idx in range(len(mo_coeffs)):
@@ -168,6 +196,217 @@ class Orca_parser(Molsoc):
         scale = 1.0 / math.sqrt(2.0)
         output.extend(coeff * scale for coeff in coefficients)
         output.extend(beta_sign * coeff * scale for coeff in coefficients)
+
+    def _orca_json_file_needs_update(self, json_file):
+        if not json_file.exists():
+            return True
+
+        source_files = [
+            self.out_file_name.with_suffix(suffix)
+            for suffix in ('.gbw', '.cis', '.property.txt', '.json.conf')
+        ]
+        source_files = [path for path in source_files if path.exists()]
+        if not source_files:
+            return False
+
+        json_mtime = json_file.stat().st_mtime
+        return any(path.stat().st_mtime > json_mtime for path in source_files)
+
+    def _write_orca_json_config(self):
+        config_file = self.out_file_name.with_suffix('.json.conf')
+        config = {}
+
+        if config_file.exists():
+            try:
+                with config_file.open('r') as handle:
+                    config = json.load(handle)
+            except json.JSONDecodeError:
+                warnings.warn(
+                    f"Could not parse {config_file.name}; replacing it with "
+                    "a minimal orca_2json config for TD vectors.",
+                    RuntimeWarning,
+                )
+
+        required_config = {
+            "CIS": True,
+            "CISNRoots": True,
+            "JSONFormats": ["json"],
+            "MOCoefficients": False,
+            "Basisset": False,
+        }
+        updated_config = dict(config)
+        updated_config.update(required_config)
+        if config_file.exists() and updated_config == config:
+            return
+
+        config = updated_config
+
+        with config_file.open('w') as handle:
+            json.dump(config, handle, indent=2)
+            handle.write("\n")
+
+    def _ensure_orca_json(self):
+        json_file = self.out_file_name.with_suffix('.json')
+        self._write_orca_json_config()
+        if not self._orca_json_file_needs_update(json_file):
+            return json_file
+
+        gbw_file = self.out_file_name.with_suffix('.gbw')
+        if not gbw_file.exists():
+            warnings.warn(
+                f"ORCA GBW file {gbw_file.name} is missing; falling back to "
+                "sparse CI amplitudes printed in the .out file.",
+                RuntimeWarning,
+            )
+            return None
+
+        try:
+            subprocess.run(
+                ['orca_2json', gbw_file.name, '-json'],
+                cwd=self.out_file_name.parent,
+                check=True,
+                universal_newlines=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+        except FileNotFoundError:
+            warnings.warn(
+                "orca_2json was not found in PATH; falling back to sparse CI "
+                "amplitudes printed in the .out file.",
+                RuntimeWarning,
+            )
+            return None
+        except subprocess.CalledProcessError as error:
+            warnings.warn(
+                "orca_2json failed while exporting TD vectors; falling back to "
+                f"sparse CI amplitudes printed in the .out file.\n{error.stdout}",
+                RuntimeWarning,
+            )
+            return None
+
+        if not json_file.exists():
+            warnings.warn(
+                f"orca_2json completed but did not create {json_file.name}; "
+                "falling back to sparse CI amplitudes printed in the .out file.",
+                RuntimeWarning,
+            )
+            return None
+
+        return json_file
+
+    def _load_orca_json(self):
+        json_file = self._ensure_orca_json()
+        if json_file is None:
+            return None
+
+        try:
+            with json_file.open('r') as handle:
+                return json.load(handle)
+        except (OSError, json.JSONDecodeError) as error:
+            warnings.warn(
+                f"Could not read ORCA JSON TD-vector data from {json_file.name}: "
+                f"{error}. Falling back to sparse CI amplitudes printed in the .out file.",
+                RuntimeWarning,
+            )
+            return None
+
+    def _json_ci_vector(self, root, key):
+        if key not in root:
+            return None
+
+        orbwin = root.get("OrbWin")
+        if not isinstance(orbwin, list) or len(orbwin) != 4:
+            raise Exception(f"ORCA JSON TD root {root.get('IRoot')} is missing a valid OrbWin field")
+
+        occ_start, occ_end, virt_start, virt_end = [int(value) for value in orbwin]
+        expected_occ = occ_end - occ_start + 1
+        expected_virt = virt_end - virt_start + 1
+
+        blocks = [block for block in root[key] if isinstance(block, list)]
+        if len(blocks) != expected_occ:
+            raise Exception(
+                f"ORCA JSON TD root {root.get('IRoot')} has {len(blocks)} {key} "
+                f"occupied blocks; expected {expected_occ}"
+            )
+
+        coefficients = [0.0] * self.ndim
+        for occ_offset, block in enumerate(blocks):
+            if len(block) != expected_virt:
+                raise Exception(
+                    f"ORCA JSON TD root {root.get('IRoot')} has a {key} virtual "
+                    f"block of length {len(block)}; expected {expected_virt}"
+                )
+
+            occ_idx = self._active_occ_position.get(occ_start + occ_offset)
+            if occ_idx is None:
+                continue
+
+            for virt_offset, amplitude in enumerate(block):
+                virt_idx = self._active_virt_position.get(virt_start + virt_offset)
+                if virt_idx is None:
+                    continue
+                transition_idx = occ_idx * self.num_virtual_orbitals + virt_idx
+                coefficients[transition_idx] = float(amplitude)
+
+        return coefficients
+
+    def _json_state_number(self, root, states):
+        state_num = int(root["IRoot"])
+        known_states = {state[0] for state in states}
+        if state_num in known_states:
+            return state_num
+
+        # Some ORCA versions/tools report roots local to the multiplicity block.
+        if 1 <= state_num <= len(states):
+            return states[state_num - 1][0]
+
+        return state_num
+
+    def _parse_json_ci_coefficients(self):
+        data = self._load_orca_json()
+        if data is None:
+            return None, None
+
+        roots = data.get("Molecule", {}).get("TD-DFT", [])
+        if not roots:
+            warnings.warn(
+                "ORCA JSON did not contain Molecule/TD-DFT vector data; "
+                "falling back to sparse CI amplitudes printed in the .out file.",
+                RuntimeWarning,
+            )
+            return None, None
+
+        singlets = {}
+        triplets = {}
+        for root in roots:
+            if "IRoot" not in root or "Multiplicity" not in root:
+                continue
+
+            x_coefficients = self._json_ci_vector(root, "X")
+            if x_coefficients is None:
+                continue
+
+            y_coefficients = self._json_ci_vector(root, "Y")
+            if y_coefficients is None:
+                xpy = x_coefficients
+                xmy = x_coefficients
+                if root.get("TDA") != "ON":
+                    warnings.warn(
+                        f"ORCA JSON root {root['IRoot']} has no Y vector even "
+                        "though it is not marked as TDA; using X for both X+Y and X-Y.",
+                        RuntimeWarning,
+                    )
+            else:
+                xpy = [x + y for x, y in zip(x_coefficients, y_coefficients)]
+                xmy = [x - y for x, y in zip(x_coefficients, y_coefficients)]
+
+            multiplicity = int(root["Multiplicity"])
+            if multiplicity == 1:
+                singlets[self._json_state_number(root, self.singlet_states)] = (xpy, xmy)
+            elif multiplicity == 3:
+                triplets[self._json_state_number(root, self.triplet_states)] = (xpy, xmy)
+
+        return singlets, triplets
 
     def _parse_mkl_basis(self):
         # Determine paths
@@ -356,6 +595,7 @@ class Orca_parser(Molsoc):
             i += 1
 
             self._parse_orbital_range(line)
+            self._parse_root_count(line)
             
             # 2. OVERLAP MATRIX
             if "OVERLAP MATRIX" in line:
@@ -569,32 +809,51 @@ class Orca_parser(Molsoc):
         # CI Coeffs
         # soc_td with 'gauss_tddft' expects 2 * ndim coefficients per state for X+Y, 
         # followed by 2 * ndim coefficients per state for X-Y.
+        self._warn_if_selected_edge_roots()
+
+        json_ci_singlets, json_ci_triplets = self._parse_json_ci_coefficients()
+        using_json_ci = json_ci_singlets is not None and json_ci_triplets is not None
+
         ci_xpy = []
         ci_xmy = []
         
         # Singlets (state numbers usually 1‑n_singl, but map generically)
         for i in self.requested_singlets:
             state_num = self.singlet_states[i-1][0]   # actual state number
-            if state_num not in ci_dict_singlets:
-                raise Exception(f"Missing ORCA CI coefficients for singlet state {state_num}")
-            coefficients = ci_dict_singlets[state_num]
-            if not any(abs(coeff) > 0.0 for coeff in coefficients):
-                raise Exception(f"ORCA printed no CI coefficients for singlet state {state_num}")
-            self._extend_gaussian_spin_blocks(ci_xpy, coefficients, beta_sign=1.0)
-            self._extend_gaussian_spin_blocks(ci_xmy, coefficients, beta_sign=1.0)
+            if using_json_ci:
+                if state_num not in json_ci_singlets:
+                    raise Exception(f"Missing ORCA JSON CI coefficients for singlet state {state_num}")
+                xpy_coefficients, xmy_coefficients = json_ci_singlets[state_num]
+            else:
+                if state_num not in ci_dict_singlets:
+                    raise Exception(f"Missing ORCA CI coefficients for singlet state {state_num}")
+                coefficients = ci_dict_singlets[state_num]
+                if not any(abs(coeff) > 0.0 for coeff in coefficients):
+                    raise Exception(f"ORCA printed no CI coefficients for singlet state {state_num}")
+                xpy_coefficients = coefficients
+                xmy_coefficients = coefficients
+            self._extend_gaussian_spin_blocks(ci_xpy, xpy_coefficients, beta_sign=1.0)
+            self._extend_gaussian_spin_blocks(ci_xmy, xmy_coefficients, beta_sign=1.0)
 
         # Triplets (state numbers can be > n_singl)
         for i in self.requested_triplets:
             state_num = self.triplet_states[i-1][0]
-            if state_num not in ci_dict_triplets:
-                raise Exception(f"Missing ORCA CI coefficients for triplet state {state_num}")
-            coefficients = ci_dict_triplets[state_num]
-            if not any(abs(coeff) > 0.0 for coeff in coefficients):
-                raise Exception(f"ORCA printed no CI coefficients for triplet state {state_num}")
-            self._extend_gaussian_spin_blocks(ci_xpy, coefficients, beta_sign=-1.0)
-            self._extend_gaussian_spin_blocks(ci_xmy, coefficients, beta_sign=-1.0)
+            if using_json_ci:
+                if state_num not in json_ci_triplets:
+                    raise Exception(f"Missing ORCA JSON CI coefficients for triplet state {state_num}")
+                xpy_coefficients, xmy_coefficients = json_ci_triplets[state_num]
+            else:
+                if state_num not in ci_dict_triplets:
+                    raise Exception(f"Missing ORCA CI coefficients for triplet state {state_num}")
+                coefficients = ci_dict_triplets[state_num]
+                if not any(abs(coeff) > 0.0 for coeff in coefficients):
+                    raise Exception(f"ORCA printed no CI coefficients for triplet state {state_num}")
+                xpy_coefficients = coefficients
+                xmy_coefficients = coefficients
+            self._extend_gaussian_spin_blocks(ci_xpy, xpy_coefficients, beta_sign=-1.0)
+            self._extend_gaussian_spin_blocks(ci_xmy, xmy_coefficients, beta_sign=-1.0)
 
-        if self._sparse_ci_threshold is not None and self._sparse_ci_threshold > 0.0:
+        if not using_json_ci and self._sparse_ci_threshold is not None and self._sparse_ci_threshold > 0.0:
             warnings.warn(
                 "ORCA printed only CI amplitudes above "
                 f"{self._sparse_ci_threshold:g}; the parsed TD vectors are incomplete. "

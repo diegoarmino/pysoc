@@ -130,8 +130,6 @@ class Soc_td():
         """        
         # Now write the strange ao_basis.dat.
         self.AO_basis_file_name = Path(self.molsoc.output, "ao_basis.dat")
-        print("molsoc.output is ")
-        print(self.molsoc.output)
         self.write_AO_basis(self.AO_basis_file_name)
         
         # Write MOs and coefficients.

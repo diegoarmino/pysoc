@@ -1,6 +1,6 @@
 ! wB97X-D3 TZVP
 %tddft
-    nroots 5
+    nroots 10
     triplets true
 end
 
