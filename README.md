@@ -423,3 +423,6 @@ originally written by Sandro Giuseppe Chiodo et al. (Computer Physics
 Communications 185 (2014) 676-683).
 
 PySOC was rewritten for Python 3.x by Oliver S. Lee.
+
+Support por ORCA was added by Diego J. Alonso de Armiño.
+
